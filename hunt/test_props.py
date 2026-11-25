@@ -176,8 +176,8 @@ def test_rename_or_merge_keeps_stores_consistent(docs, a, b, merge):
                 gone, kept = a, b
             else:
                 new = f"{a} renamed"
-                await rag.aedit_entity(a, {"entity_name": new})
-                gone, kept = a, new
+                r = await rag.aedit_entity(a, {"entity_name": new})
+                gone, kept = a, r["entity_name"]  # stored (normalized) name
             s = await snapshot(rag)
             assert check_invariants(s) == []
             assert gone not in s["nodes"] and kept in s["nodes"]
