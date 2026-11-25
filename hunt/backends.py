@@ -69,6 +69,12 @@ PROFILES: dict[str, dict[str, str]] = {
         graph_storage="NetworkXStorage",
         doc_status_storage="JsonDocStatusStorage",
     ),
+    "memgraph": dict(
+        kv_storage="JsonKVStorage",
+        vector_storage="NanoVectorDBStorage",
+        graph_storage="MemgraphStorage",
+        doc_status_storage="JsonDocStatusStorage",
+    ),
     "memgraph-milvus": dict(
         kv_storage="JsonKVStorage",
         vector_storage="MilvusVectorDBStorage",
