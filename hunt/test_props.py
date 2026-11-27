@@ -245,7 +245,9 @@ MANUAL_NAMES = ["Manual Zed", "手工实体", "Ωmega Manual"]  # never produced
 
 
 @given(corpus, st.lists(st.tuples(st.sampled_from(MANUAL_NAMES), st.sampled_from(SAFE_VOCAB)), min_size=1, max_size=4),
-       st.sampled_from(["none", "rename", "merge", "delete_relation"]), st.sampled_from(SAFE_VOCAB),
+       st.sampled_from(["none", "rename", "merge", "delete_relation", "delete_entity", "rename_recreate",
+                        "lower_weight"]),
+       st.sampled_from(SAFE_VOCAB),
        st.sampled_from(SAFE_VOCAB))
 def test_manual_objects_survive_document_deletion(docs, links, op, a, b):
     """Hand-made entities, and hand-made relations whose endpoints survive,
@@ -273,6 +275,25 @@ def test_manual_objects_survive_document_deletion(docs, links, op, a, b):
                 # explicit deletion, then a hand-made relation under the same key
                 await rag.adelete_by_relation(a, b)
                 await rag.acreate_relation(a, b, {"description": "curated", "keywords": "k", "weight": 0.5})
+                led.add_relation(a, b)
+            elif op == "delete_entity" and a in nodes and b in nodes and a != b:
+                # the anchors keep naming a and a~b; recreate both by hand
+                await rag.adelete_by_entity(a)
+                led.entity_deleted(a)  # its relations go with it
+                await rag.acreate_entity(a, {"description": "curated", "entity_type": "t", "source_id": ""})
+                await rag.acreate_relation(a, b, {"description": "curated", "keywords": "k", "weight": 0.5})
+                led.add_entity(a)
+                led.add_relation(a, b)
+            elif op == "rename_recreate" and a in nodes and b in nodes and a != b:
+                r = await rag.aedit_entity(a, {"entity_name": f"{a} renamed"})
+                led.renamed(a, r["entity_name"])
+                await rag.acreate_entity(a, {"description": "curated", "entity_type": "t"})
+                await rag.acreate_relation(a, b, {"description": "curated", "keywords": "k", "weight": 0.5})
+                led.add_entity(a)
+                led.add_relation(a, b)
+            elif op == "lower_weight" and a in nodes and b in nodes and a != b \
+                    and await rag.chunk_entity_relation_graph.has_edge(a, b):
+                await rag.aedit_relation(a, b, {"description": "lowered", "source_id": "", "weight": 0.25})
                 led.add_relation(a, b)
             elif op == "rename" and a in nodes:
                 r = await rag.aedit_entity(a, {"entity_name": f"{a} renamed"})

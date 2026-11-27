@@ -37,6 +37,9 @@ LOOP = asyncio.new_event_loop()
 # (probes/probe_manual_entity_purged.py).
 FILTER_C1 = os.environ.get("HUNT_FILTER_C1", "1") != "0"
 QUERY_CHECK = os.environ.get("HUNT_QUERY", "1") != "0"
+# With the sourceless-candidate fix, a relation whose sources were cleared by
+# hand is kept like any hand-made one; main deletes it with its document.
+EXPECT_SOURCELESS_KEPT = os.environ.get("HUNT_EXPECT_SOURCELESS_KEPT", "1") != "0"
 
 
 def run(coro):
@@ -62,6 +65,7 @@ class LightRAGMachine(RuleBasedStateMachine):
     def teardown(self):
         import collections, json
         c = collections.Counter(x.split()[0] for x in self.log if not x.startswith("  "))
+        os.makedirs("/tmp/hunt", exist_ok=True)
         with open("/tmp/hunt/sm_ops.jsonl", "a") as f:
             f.write(json.dumps(c) + "\n")
         run(self.rag.finalize_storages())
@@ -144,7 +148,8 @@ class LightRAGMachine(RuleBasedStateMachine):
         if not nodes:
             return
         a = data.draw(st.sampled_from(nodes))
-        new = data.draw(st.sampled_from([f"{a}2", a.upper(), a.lower(), f" {a} ", f"{a}的"]))
+        # SAFE_VOCAB names may be keys a stale anchor still names
+        new = data.draw(st.sampled_from([f"{a}2", a.upper(), a.lower(), f" {a} ", f"{a}的"] + SAFE_VOCAB))
         self.log.append(f"rename {a!r} -> {new!r}")
         self._record_moved([a])
         try:
@@ -173,6 +178,20 @@ class LightRAGMachine(RuleBasedStateMachine):
         stored = (r or {}).get("entity_name", tgt) if isinstance(r, dict) else tgt
         self.derived.add(stored)
         self.manual.merged(srcs, stored)
+
+    @rule(data=st.data())
+    def lower_weight(self, data):
+        """Documented weight lowering: clear source_id in the same edit. The
+        relation is hand-made from then on (PurgeRecoveryContract,
+        *Candidates without a source*)."""
+        edges = run(self.rag.chunk_entity_relation_graph.get_all_edges())
+        if not edges:
+            return
+        s, t = data.draw(st.sampled_from(sorted((x["source"], x["target"]) for x in edges)))
+        self.log.append(f"lower_weight {s!r}~{t!r}")
+        run(self.rag.aedit_relation(s, t, {"description": "lowered", "source_id": "", "weight": 0.25}))
+        if EXPECT_SOURCELESS_KEPT:
+            self.manual.add_relation(s, t)
 
     @rule(data=st.data())
     def delete_entity(self, data):
@@ -237,11 +256,13 @@ class LightRAGMachine(RuleBasedStateMachine):
         self.log.append(f"edit_relation {s!r}~{t!r}")
         run(self.rag.aedit_relation(s, t, {"description": "edited " + s}))
 
-    @rule(name=st.sampled_from(SAFE_VOCAB + ["Manual X", "手动"]), other=st.sampled_from(SAFE_VOCAB))
-    def create(self, name, other):
-        self.log.append(f"create {name!r} + rel to {other!r}")
+    @rule(name=st.sampled_from(SAFE_VOCAB + ["Manual X", "手动"]), other=st.sampled_from(SAFE_VOCAB),
+          empty_source=st.booleans())
+    def create(self, name, other, empty_source):
+        self.log.append(f"create {name!r} + rel to {other!r} empty_source={empty_source}")
         try:
-            run(self.rag.acreate_entity(name, {"description": "manual", "entity_type": "t"}))
+            extra = {"source_id": ""} if empty_source else {}
+            run(self.rag.acreate_entity(name, {"description": "manual", "entity_type": "t", **extra}))
             self.derived.add(name)
             self.manual.add_entity(name)
         except ValueError as e:
@@ -273,6 +294,9 @@ class LightRAGMachine(RuleBasedStateMachine):
             if "references deleted chunks" in e
             and any(e.startswith(f"node {k!r} ") or e.startswith(f"edge {k!r} ") for k in dead_ok)
         ]
+        # acreate_entity(..., {"source_id": ""}) is a legal source-less entity
+        known += [e for e in errs if e.endswith("has empty source_id")
+                  and any(e == f"node {m!r} has empty source_id" for m in self.manual.entities)]
         new = [e for e in errs if e not in known]
         new += self.manual.check(s)
         new += run(self._query_check(s)) if QUERY_CHECK else []
