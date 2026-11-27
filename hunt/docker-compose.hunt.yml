@@ -23,6 +23,10 @@ services:
     hostname: mongodb
     image: mongodb/mongodb-atlas-local:8
     ports: ["27018:27017"]
+    # every fault point / example uses a fresh workspace (new collections and
+    # search indexes); the default nofile limit crashes mongod mid-sweep
+    ulimits:
+      nofile: {soft: 1048576, hard: 1048576}
   qdrant:
     image: qdrant/qdrant:latest
     ports: ["16333:6333"]

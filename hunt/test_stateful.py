@@ -36,6 +36,7 @@ LOOP = asyncio.new_event_loop()
 # real source. Filtered by default; HUNT_FILTER_C1=0 shows it
 # (probes/probe_manual_entity_purged.py).
 FILTER_C1 = os.environ.get("HUNT_FILTER_C1", "1") != "0"
+QUERY_CHECK = os.environ.get("HUNT_QUERY", "1") != "0"
 
 
 def run(coro):
@@ -70,6 +71,35 @@ class LightRAGMachine(RuleBasedStateMachine):
     def seed_corpus(self, seed):
         for text in seed:
             self.insert(text)
+
+    async def _query_check(self, s):
+        """Q1: a query surfaces only live objects (no deleted chunk/entity)."""
+        from lightrag import QueryParam
+
+        errs = []
+        names = sorted(s["nodes"])[:3] or ["Alice"]
+        q = " ".join(names)
+        live_chunks = set(s["kv"].get("text_chunks", {}))
+        for mode in ("local", "global", "hybrid", "mix", "naive"):
+            r = await self.rag.aquery_data(q, param=QueryParam(mode=mode, top_k=20, chunk_top_k=10))
+            if not isinstance(r, dict) or r.get("status") not in ("success", None):
+                if isinstance(r, dict) and r.get("status") == "failure" and "no" in str(r.get("message", "")).lower():
+                    continue
+                errs.append(f"QUERY {mode}: status {r.get('status') if isinstance(r, dict) else r!r}: {str(r.get('message') if isinstance(r, dict) else '')[:120]}")
+                continue
+            d = r.get("data", {})
+            for e in d.get("entities", []):
+                if e.get("entity_name") not in s["nodes"]:
+                    errs.append(f"QUERY {mode}: entity {e.get('entity_name')!r} not in graph")
+            for x in d.get("relationships", []):
+                k = "<SEP>".join(sorted((x.get("src_id"), x.get("tgt_id"))))
+                if k not in s["edges"]:
+                    errs.append(f"QUERY {mode}: relation {k!r} not in graph")
+            for c in d.get("chunks", []):
+                cid = c.get("chunk_id")
+                if cid and cid not in live_chunks:
+                    errs.append(f"QUERY {mode}: chunk {cid!r} not in text_chunks")
+        return errs
 
     def _record_moved(self, names):
         snap = run(snapshot(self.rag))
@@ -245,8 +275,11 @@ class LightRAGMachine(RuleBasedStateMachine):
         ]
         new = [e for e in errs if e not in known]
         new += self.manual.check(s)
+        new += run(self._query_check(s)) if QUERY_CHECK else []
         self.manual.prune_missing_endpoints(s)
-        assert new == [], "\n".join(self.log[-15:] + ["--"] + new)
+        import lightrag
+
+        assert new == [], "\n".join([f"code: {lightrag.__file__}"] + self.log[-15:] + ["--"] + new)
 
 
 LightRAGMachine.TestCase.settings = settings(

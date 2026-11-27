@@ -1,6 +1,7 @@
 # hunt/ — LLM-free bug-hunting harness for LightRAG
 
-Not for upstream. Lives on the fork's `hunt/harness` branch only.
+Not for upstream. Lives on the fork's `hunt/*` branches only (`hunt/harness`
+round 1, `hunt/round2` rebased onto a newer `main`).
 
 Everything is driven by deterministic fakes (`fakes.py`):
 
@@ -27,6 +28,22 @@ docker compose -f hunt/docker-compose.hunt.yml down -v   # always clean up
 
 Never point these at a `.env` with real keys; nothing here needs one.
 
+## Running against another code tree
+
+`HUNT_CODE=/path/to/checkout` makes every tool, probe and pytest run import
+`lightrag` from that tree (a candidate fix, a closed PR) and fails loudly if it
+could not. Do not rely on `PYTHONPATH`: pytest puts the `hunt/` package's
+parent first on `sys.path`, so a `PYTHONPATH` override is silently ignored.
+
+```bash
+cd /tmp/somewhere   # keep the hypothesis database apart per code tree
+HUNT_CODE=/tmp/proto PYTHONPATH=$REPO $REPO/.venv/bin/python -m pytest $REPO/hunt/test_stateful.py -p no:cacheprovider
+```
+
+**A candidate fix is only ready to propose after** the state machine and the
+property tests pass against it (`HUNT_CODE`), including the hand-made-object
+checks below, and the upstream offline suite still passes.
+
 ## Tools
 
 | Command | What it does |
@@ -40,10 +57,34 @@ Never point these at a `.env` with real keys; nothing here needs one.
 | `python -m hunt.insert_sweep` | Same for ingestion: fault while a doc ingests, then delete the FAILED doc and check the graph is back to before. |
 | `python -m hunt.race --seeds N` | Concurrent mixes of insert/delete/admin edits with a slow LLM; invariants after the pipeline settles. |
 | `python hunt/probes/*.py` | Minimal reproductions of each reported candidate. |
+| `python hunt/probes/probe_parallel_merges.py P N merge\|rename` | Two concurrent admin edits of adjacent entities, N trials (round 2, R1). |
 
 Profiles (`backends.py`): `file` (Json/NetworkX/Nano), `file-faiss`, `pg`
 (AGE graph), `pg-table`, `neo4j-redis-qdrant`, `mongo` (Atlas local, vector
 search), `milvus`, `memgraph-milvus`.
+
+## Hand-made objects (`manual.py`, round 2)
+
+`ManualLedger` follows every `acreate_entity` / `acreate_relation` /
+`ainsert_custom_kg` object through renames and merges (the regression that got
+#4688 closed deleted a source-less manual relation, and nothing here noticed):
+
+* M1 a manual entity survives unless explicitly deleted; the one documented
+  exception (`acreate_*` docstrings, #3856) is a manual object that later gained
+  document evidence, purged with its last real source -- filtered as
+  `documented` (`HUNT_FILTER_C1=0` shows it);
+* M2 a manual relation survives whenever both endpoints survive;
+* M3 a manual object keeps a description.
+
+The state machine checks them after every step and also has `custom_kg` and
+`delete_relation` rules; `test_props.py::test_manual_objects_survive_document_deletion`
+checks them across delete / rename / merge / delete-and-recreate.
+Q1 (state machine, `HUNT_QUERY=0` to skip): every query mode returns only
+live entities, relations and chunks.
+
+The documented rename/merge residue (#4716) is filtered precisely: a dangling
+chunk reference is accepted only when every dead id was on an object a
+rename/merge moved, at move time.
 
 ## Invariants (`state.check_invariants`)
 
