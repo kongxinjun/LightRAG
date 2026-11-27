@@ -8903,6 +8903,8 @@ class LightRAG(_RoleLLMMixin, _StorageMigrationMixin, _PipelineMixin):
         them workspace-wide would be a throughput regression for no
         correctness gain.
         """
+        return True  # hunt prototype: gate every backend
+
         if getattr(
             type(self.chunk_entity_relation_graph), "requires_single_writer", False
         ):
