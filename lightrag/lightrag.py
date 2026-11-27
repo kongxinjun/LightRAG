@@ -8983,6 +8983,33 @@ class LightRAG(_RoleLLMMixin, _StorageMigrationMixin, _PipelineMixin):
             return f"{workspace}:{ADMIN_WRITE_LOCK_NAMESPACE_SUFFIX}"
         return ADMIN_WRITE_LOCK_NAMESPACE_SUFFIX
 
+    async def _acquire_admin_lock(self, admin_lock, operation: str) -> None:
+        """Wait for the workspace admin lock, bounded; 409 on timeout."""
+        # WAIT for a peer admin write, bounded. ``_KeyedLockContext.__aenter__``
+        # rolls back partially acquired keys under a shield on cancellation, so
+        # a timeout here leaks nothing. ``asyncio.timeout`` (3.11+) runs the
+        # acquire in THIS task, so an acquisition that lands in the same tick
+        # as the expiry is either kept or rolled back -- never completed in a
+        # wrapper task whose result the timeout then throws away; ``wait_for``
+        # is the 3.10 fallback.
+        try:
+            timeout_cm = getattr(asyncio, "timeout", None)
+            if timeout_cm is not None:
+                async with timeout_cm(ADMIN_WRITE_LOCK_ACQUIRE_TIMEOUT):
+                    await admin_lock.__aenter__()
+            else:  # pragma: no cover - Python 3.10 only
+                await asyncio.wait_for(
+                    admin_lock.__aenter__(), timeout=ADMIN_WRITE_LOCK_ACQUIRE_TIMEOUT
+                )
+        except asyncio.TimeoutError:
+            raise AdminWriteGateRefusedError(
+                f"{ADMIN_WRITE_LOCK_BUSY_PREFIX}: `{operation}` waited "
+                f"{ADMIN_WRITE_LOCK_ACQUIRE_TIMEOUT:g}s for the workspace admin "
+                "lock held by another entity/relation edit. Retry once that edit "
+                "has finished.",
+                fence="admin_lock",
+            ) from None
+
     @asynccontextmanager
     async def _admin_write_gate(self, operation: str):
         """Serialize an admin graph write against its peers and the pipeline.
@@ -9036,40 +9063,26 @@ class LightRAG(_RoleLLMMixin, _StorageMigrationMixin, _PipelineMixin):
         semantics, and the release-time drive obligation including why a
         synchronous wrapper must await it.
         """
-        if not self._admin_write_gate_required():
-            yield
-            return
-
         workspace = self.workspace or ""
         admin_lock = get_storage_keyed_lock(
             [ADMIN_WRITE_LOCK_KEY],
             namespace=self._admin_write_lock_namespace(),
             enable_logging=False,
         )
-        # WAIT for a peer admin write, bounded. ``_KeyedLockContext.__aenter__``
-        # rolls back partially acquired keys under a shield on cancellation, so
-        # a timeout here leaks nothing. ``asyncio.timeout`` (3.11+) runs the
-        # acquire in THIS task, so an acquisition that lands in the same tick
-        # as the expiry is either kept or rolled back -- never completed in a
-        # wrapper task whose result the timeout then throws away; ``wait_for``
-        # is the 3.10 fallback.
-        try:
-            timeout_cm = getattr(asyncio, "timeout", None)
-            if timeout_cm is not None:
-                async with timeout_cm(ADMIN_WRITE_LOCK_ACQUIRE_TIMEOUT):
-                    await admin_lock.__aenter__()
-            else:  # pragma: no cover - Python 3.10 only
-                await asyncio.wait_for(
-                    admin_lock.__aenter__(), timeout=ADMIN_WRITE_LOCK_ACQUIRE_TIMEOUT
-                )
-        except asyncio.TimeoutError:
-            raise AdminWriteGateRefusedError(
-                f"{ADMIN_WRITE_LOCK_BUSY_PREFIX}: `{operation}` waited "
-                f"{ADMIN_WRITE_LOCK_ACQUIRE_TIMEOUT:g}s for the workspace admin "
-                "lock held by another entity/relation edit. Retry once that edit "
-                "has finished.",
-                fence="admin_lock",
-            ) from None
+        if not self._admin_write_gate_required():
+            # No pipeline exclusion is needed here, but admin writes must still
+            # serialize against each other: a rename or merge rewrites every
+            # incident edge without locking its far endpoint and then deletes
+            # the old node, which cascades. Two concurrent edits of adjacent
+            # entities each delete the edge the other has just written, and
+            # both report success.
+            await self._acquire_admin_lock(admin_lock, operation)
+            try:
+                yield
+            finally:
+                await admin_lock.__aexit__(None, None, None)
+            return
+        await self._acquire_admin_lock(admin_lock, operation)
 
         # Generated BEFORE any await so the ``finally`` can release by owner
         # even if the acquire below is cancelled at its lock exit.
