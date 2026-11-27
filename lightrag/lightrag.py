@@ -7829,8 +7829,9 @@ class LightRAG(_RoleLLMMixin, _StorageMigrationMixin, _PipelineMixin):
                     existing_sources = graph_sources
 
                 if not existing_sources:
-                    entities_to_delete.add(node_label)
-                    entity_chunk_updates[node_label] = []
+                    # No chunk and no placeholder: nothing this document
+                    # contributed is left on the object (a hand-made object
+                    # recreated under a stale anchor key). Keep it.
                     continue
 
                 remaining_sources = subtract_source_ids(existing_sources, chunk_ids)
@@ -7899,8 +7900,8 @@ class LightRAG(_RoleLLMMixin, _StorageMigrationMixin, _PipelineMixin):
                     existing_sources = graph_sources
 
                 if not existing_sources:
-                    relationships_to_delete.add(edge_tuple)
-                    relation_chunk_updates[edge_tuple] = []
+                    # Source-less relation (acreate_relation / custom KG without
+                    # source_id): it carries none of this document's chunks.
                     continue
 
                 remaining_sources = subtract_source_ids(existing_sources, chunk_ids)
