@@ -1,5 +1,5 @@
 import os, asyncio, sys, json
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from hunt.fault_sweep import Injector, build, WRITE_METHODS
 async def main():
     inj = Injector({"delete_node"}); rag = await build("file", inj)

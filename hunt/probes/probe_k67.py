@@ -1,5 +1,5 @@
 import os, asyncio, sys
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from hunt.fault_sweep import Injector, build, DOCS, WRITE_METHODS
 async def main():
     inj = Injector(WRITE_METHODS); rag = await build("file", inj)

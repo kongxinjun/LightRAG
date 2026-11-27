@@ -1,5 +1,5 @@
 import asyncio, sys, os, tempfile, uuid
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from hunt.backends import DOCKER_ENV
 for k,v in DOCKER_ENV.items(): os.environ.setdefault(k,v)
 from hunt.run_scenario import make_rag

@@ -220,6 +220,8 @@ def check_invariants(s: dict[str, Any], *, cache_purged: bool = False) -> list[s
     # 4. every chunk belongs to a doc that still exists
     full_docs = set(s["kv"].get("full_docs", {}))
     for cid, row in s["kv"].get("text_chunks", {}).items():
+        if str(row.get("full_doc_id") or "").startswith("ckg"):
+            continue  # ainsert_custom_kg chunks have no full_docs row by design
         if row.get("full_doc_id") not in full_docs:
             errs.append(f"chunk {cid} belongs to missing doc {row.get('full_doc_id')}")
     # 5. doc_status chunk list matches text_chunks

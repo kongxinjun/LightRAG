@@ -1,5 +1,5 @@
 import os, asyncio, sys, tempfile, uuid, json
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from hunt.run_scenario import make_rag
 from hunt.state import snapshot, check_invariants
 
